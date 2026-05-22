@@ -47,10 +47,10 @@ utils/arrays.sh  → PREFLIGHT_ARRAY
 
 # Current preflight order
 ```text
-preflight_input.sh
 preflight_variables.sh
-preflight_scripts.sh
+preflight_input.sh
 preflight_commands.sh
+preflight_scripts.sh
 preflight_env.sh
 ```
 

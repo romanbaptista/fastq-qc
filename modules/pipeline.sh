@@ -47,12 +47,12 @@ echo "  SUBMITTING 1_fastqc.sh ..."
 # Submit fastqc
 FASTQC=$(
     sbatch \
-    --parsable \
-    --export="${SBATCH_EXPORTS}" \
-    --cpus-per-task="${FASTQC_CPUS}" \
-    --mem-per-cpu="${FASTQC_MEM_PER_CPU}" \
-    --output="${LOG_DIR}/1_fastqc.%j.log" \
-    "${MODULES_DIR}/1_fastqc.sh"
+        --parsable \
+        --export="${SBATCH_EXPORTS}" \
+        --cpus-per-task="${FASTQC_CPUS}" \
+        --mem-per-cpu="${FASTQC_MEM_PER_CPU}" \
+        --output="${LOG_DIR}/1_fastqc.%j.log" \
+        "${MODULES_DIR}/1_fastqc.sh"
 ) || fail "  Failed to submit 1_fastqc.sh"
 
 echo "  1_fastqc.sh SUBMITTED"
@@ -62,13 +62,13 @@ echo "  SUBMITTING 2_multiqc.sh ..."
 # Submit multiqc
 MULTIQC=$(
     sbatch \
-    --parsable \
-    --export="${SBATCH_EXPORTS}" \
-    --cpus-per-task="${MULTIQC_CPUS}" \
-    --mem-per-cpu="${MULTIQC_MEM_PER_CPU}" \
-    --dependency=afterok:"${FASTQC}" \
-    --output="${LOG_DIR}/2_multiqc.%j.log" \
-    "${MODULES_DIR}/2_multiqc.sh"
+        --parsable \
+        --export="${SBATCH_EXPORTS}" \
+        --cpus-per-task="${MULTIQC_CPUS}" \
+        --mem-per-cpu="${MULTIQC_MEM_PER_CPU}" \
+        --dependency=afterok:"${FASTQC}" \
+        --output="${LOG_DIR}/2_multiqc.%j.log" \
+        "${MODULES_DIR}/2_multiqc.sh"
 ) || fail "  Failed to submit 2_multiqc.sh"
 
 echo "  2_multiqc.sh SUBMITTED"
