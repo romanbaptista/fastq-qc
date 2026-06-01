@@ -1,30 +1,35 @@
 #!/bin/bash
-set -euo pipefail
 
-######################### GUARDS ##########################
+######################### GUARDS #########################
 
-: "${INPUT_DIR:?INPUT_DIR not set (check config.sh)}"
+GUARD_ARRAY=(
+    INPUT_DIR
+)
+
+for var in "${GUARD_ARRAY[@]}"; do
+    variable_check_nonempty "${var}" || fail_message "Variable is empty or not defined: ${var}"
+done
 
 ######################### SETUP ##########################
 
 # Define script name
-SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}" .sh)
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
+# Define filetype pattern
+FILE_PATTERN="*.fastq.gz"
 
-######################### MAIN ############################
+######################### MAIN ###########################
 
-echo "  RUNNING ${SCRIPT_NAME} ..."
-echo "  Checking input directory: ${INPUT_DIR}..."
+echo
+echo "RUNNING ${SCRIPT_NAME} ..."
+echo "  Confirming input directory..."
 
-# Check input directory
-check_directory "${INPUT_DIR}" || fail "  Please provide an INPUT_DIR in config.sh that exists"
+directory_check_exists "${INPUT_DIR}" || fail_message "Input directory not found: ${INPUT_DIR}"
+directory_check_nonempty "${INPUT_DIR}" || fail_message "Input directory is empty: ${INPUT_DIR}"
 
-echo "  Input directory confirmed: ${INPUT_DIR}"
-echo "  Checking for compressed FASTQ files..."
+echo "  Input directory confirmed"
+echo "  Confirming ${FILE_PATTERN} files..."
 
-# Check for compressed FASTQ files
-if ! find "${INPUT_DIR}" -type f -name "*.fastq.gz" | grep -q .; then
-    fail "  ERROR: No .fastq.gz files found in '${INPUT_DIR}'"
-fi
+directory_check_filetype "${INPUT_DIR}" "${FILE_PATTERN}" || fail_message "No files matching pattern '${FILE_PATTERN}' found in '${INPUT_DIR}'"
 
-echo "  FASTQ files found"
-echo "  ${SCRIPT_NAME} COMPLETE"
+echo "  ${FILE_PATTERN} files confirmed"
+echo "${SCRIPT_NAME} COMPLETE"

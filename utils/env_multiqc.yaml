@@ -1,4 +1,4 @@
-name: env_qc
+name: env_multiqc
 channels:
   - conda-forge
   - bioconda

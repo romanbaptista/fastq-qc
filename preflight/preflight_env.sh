@@ -1,93 +1,53 @@
 #!/bin/bash
 set -euo pipefail
 
-######################### GUARDS ##########################
+######################### GUARDS #########################
 
-: "${UTILS_DIR:?UTILS_DIR not set (check PATHS section in run_pipeline.sh)}"
+GUARD_ARRAY=(
+    FUNCTIONS_DIR
+    ENV_DIR
+    ENV_NAME
+    YAML_FILE
+    SENTINEL_FILE
+)
 
-######################### SETUP ###########################
+for var in "${GUARD_ARRAY[@]}"; do
+    : "${!var:?${var} not set or empty}"
+done
+
+######################### SETUP ##########################
 
 # Define script name
-SCRIPT_NAME=$(basename "${BASH_SOURCE[0]}" .sh)
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
 
-# Define environment name
-ENV_NAME="env_qc"
-# Define YAML file path
-YAML_FILE="${UTILS_DIR}/env_qc.yaml"
+######################### SOURCE #########################
 
-# Define tmux code
-TMUX_INJECT="set -euo pipefail; \
-    export UTILS_DIR='${UTILS_DIR}'; \
-    export YAML_FILE='${YAML_FILE}'; \
-    export ENV_NAME='${ENV_NAME}'; \
-    source '${UTILS_DIR}/functions_base.sh'; \
-    source '${UTILS_DIR}/functions_env.sh'; \
-    create_env '${ENV_NAME}' '${YAML_FILE}'; \
-    tmux kill-session -t '${TMUX_SESSION_NAME}'"
+source "${FUNCTIONS_DIR}/functions_base.sh"
+source "${FUNCTIONS_DIR}/functions_conda.sh"
 
+######################### CHECKS #########################
 
-######################## SOURCE ###########################
+file_check_exists "${YAML_FILE}" || fail_message "YAML file not found: ${YAML_FILE}"
+file_check_nonempty "${YAML_FILE}" || fail_message "YAML file is empty: ${YAML_FILE}"
 
-# Source environment functions
-source "${UTILS_DIR}/functions_env.sh"
+######################### MAIN ###########################
 
-######################### MAIN ############################
+echo
+echo "RUNNING ${SCRIPT_NAME} ..."
+echo "  Info:"
+echo "    Environment name:     ${ENV_NAME}"
+echo "    YAML file:            ${YAML_FILE}"
 
-echo "  RUNNING ${SCRIPT_NAME} ..."
-echo "  Checking for conda environment: ${ENV_NAME}..."
+echo "  Creating conda environment..."
 
-# Load module
-module load apps/anaconda-4.7.12.tcl
+conda_enable || fail_message "Failed to enable conda"
+conda_create_env "${ENV_NAME}" "${YAML_FILE}" || fail_message "Failed to create conda environment: ${ENV_NAME}"
 
-# Enable conda in non-interactive shell
-set +u
-eval "$(conda shell.bash hook)"
-set -u
+echo "  Conda environment created: ${ENV_NAME}"
+echo "  Creating sentinel file..."
 
-# If environment not present
-if ! check_env "${ENV_NAME}"; then
-    
-    # Checks
-    check_variable ENV_NAME || fail "  Please ensure an environment name (ENV_NAME) is provided"
-    check_file "${YAML_FILE}" || fail "  Please ensure that YAML file exists: ${YAML_FILE}"
-    check_file_data "${YAML_FILE}" || fail "  Please ensure that YAML file contains data: ${YAML_FILE}"
+touch "${SENTINEL_FILE}" || fail_message "Failed to create sentinel file"
+file_check_exists "${SENTINEL_FILE}" || fail_message "Sentinel file not found: ${SENTINEL_FILE}"
 
-    echo "  Conda environment not found: ${ENV_NAME}"
-    echo "  Creating tmux session: ${TMUX_SESSION_NAME}..."
-
-    # Start tmux session
-    tmux new-session -d -s "${TMUX_SESSION_NAME}" \
-        ${TMUX_INJECT}
-    
-    echo "  tmux session created: ${TMUX_SESSION_NAME}"
-    echo "  To attach to the session use; 'tmux attach -t ${TMUX_SESSION_NAME}'"
-    echo "  To detach again, without stopping jobs; Press Ctrl+b then d"
-    echo "  To kill session, use; 'tmux kill-session -t ${TMUX_SESSION_NAME}'"
-    echo "  User may disconnect from the cluster if required, while environment creation continues"
-    
-    # Set up timeout counter (3 hours by default)
-    MAX_WAIT=10800
-    WAITED=0
-
-    # Check for sentinel file
-    while ! check_file "${UTILS_DIR}/.conda_env_ready"; do
-
-        TIME_TO_WAIT=10
-        sleep ${TIME_TO_WAIT}s
-        WAITED=$((WAITED + ${TIME_TO_WAIT}))
-
-        # Check counter
-        if (( WAITED >= MAX_WAIT )); then
-            fail "  ERROR: Conda environment setup timed out after ${MAX_WAIT}s"
-        fi
-    done
-
-    # Remove sentinel file
-    rm -f "${UTILS_DIR}/.conda_env_ready"
-
-    # Confirm creation
-    check_env "${ENV_NAME}" || fail "  Conda environment creation may have failed"
-fi
-
-echo "  Conda environment found: ${ENV_NAME}"
-echo "  ${SCRIPT_NAME} COMPLETE"
+echo "  Sentinel file created"
+echo "${SCRIPT_NAME} COMPLETE"

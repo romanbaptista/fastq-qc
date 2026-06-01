@@ -1,144 +1,185 @@
 # `preflight`
-This directory contains the preflight validation layer for the `fastq-qc` pipeline.
 
-Preflight scripts are responsible for all validation and environment checks required to safely execute the pipeline on an HPC system before any SLURM jobs are submitted.
+# Overview
+The `preflight/` directory implements the validation and environment construction layer of the pipeline.
 
-No pipeline modules are executed unless all preflight checks succeed.
+This layer is responsible for ensuring that all requirements are satisfied before any SLURM jobs are submitted.
+It performs:
+- validation of user configuration
+- validation of system environment
+- validation of input FASTQ data
+- validation of pipeline structure
+- construction of runtime directories
+- creation of runtime environments (MultiQC conda environment)
+- construction of the execution ABI (`SBATCH_EXPORTS`)
 
-All preflight scripts are sourced and executed by `run_pipeline.sh` on the login node, ensuring that pipeline execution begins only after the environment, configuration, and inputs are fully validated.
+The preflight phase enforces a strict fail‑fast model, guaranteeing that downstream execution begins only in a fully validated and deterministic state.
 
-# Design Contract
-All preflight scripts adhere to the following principles:
-- Fail‑fast validation before any pipeline execution
-- No side effects beyond controlled, deterministic environment setup
-- Clear, actionable error messages on failure
-- Deterministic behavior with explicit ordering
-- Validation only — no execution or data processing logic
-- Centralized enforcement of pipeline invariants
-- Strict use of canonical arrays (`PREFLIGHT_ARRAY`, `COMMAND_ARRAY`, `VARIABLE_ARRAY`)
+# Design Principles
+The preflight layer follows core architectural rules:
+- Fail-fast — any error immediately terminates the pipeline
+- Validation-only responsibility — no execution or data processing logic
+- Deterministic ordering — all steps run in a strictly defined sequence
+- Explicit contracts — validation driven entirely by arrays
+- No hidden state — all required variables, tools, and inputs are explicitly checked
+- Reproducibility — environments are created deterministically from YAML specifications
 
-Once preflight validation completes successfully, downstream scripts may assume:
-- All required configuration variables are valid and non‑empty
-- All required commands and tools are available and usable
-- Input data is present and correctly structured
-- Required directories exist and are writable
-- The MultiQC conda environment is available and correctly configured
-- Execution modules can safely run without any further validation
+This ensures that all downstream scripts can assume:
+- consistent state
+- valid inputs
+- functional tools
+- reproducible environments
 
-# Responsibilities of Preflight
-The preflight layer ensures that:
-- User configuration is complete and non‑empty
-- Input directory structure is valid and contains FASTQ data
-- Pipeline module scripts exist and are non‑empty
-- Required external commands are available
-- The MultiQC conda environment exists or is created deterministically
-- Environment setup is reproducible and restart‑safe
+# Role in the Pipeline
+The preflight layer is executed immediately after the entrypoint script (`fastq-qc.sh`) and before any SLURM submission occurs.
 
-This prevents late‑stage failures, wasted cluster resources, and partially executed pipelines caused by missing dependencies or invalid inputs.
+It ensures:
+- all required variables are defined and non-empty
+- all required binaries are available
+- all input files and directories are valid
+- all pipeline scripts exist and are executable
+- all runtime directories are created
+- the MultiQC conda environment is created and ready
+- the execution ABI is fully constructed
 
-# Preflight Script Overview
-The set and execution order of all preflight scripts is centrally defined in:
+Only once all checks succeed does execution proceed to the pipeline orchestration stage.
 
+# Execution Flow
+Preflight is orchestrated by `preflight.sh`.
+
+This script:
+- sources `array_preflight.sh`
+- validates the existence of `preflight_env.sh` explicitly
+- executes each preflight script in order
+- terminates immediately on failure
+
+Each script:
+- consumes only validated upstream state
+- constructs or validates a specific part of the environment
+
+This enforces a strict producer → consumer relationship between stages.
+
+# Preflight Stages
+The pipeline implements the following validation stages:
+
+### Paths
+- Defines all pipeline directories via `utils_paths.sh`
+- Extends `DIR_ARRAY` with pipeline-specific directories
+- Creates all required directories
+
+### Variables
+- Validates user-defined configuration variables from `config.sh`
+
+### Binaries
+- Verifies required system-level CLI tools from `BINARY_ARRAY`
+
+### Input
+- Validates input directory structure
+- Confirms presence of `.fastq.gz` files
+
+### Exports
+- Constructs the pipeline execution ABI from `EXPORT_ARRAY`
+- Generates `SBATCH_EXPORTS` for SLURM job submission
+
+### Pipeline
+- Confirms all module scripts exist
+- Ensures scripts are non-empty and executable
+- Validates presence of `pipeline.sh`
+
+### MultiQC Environment
+- Validates existence of the MultiQC conda environment
+- If absent:
+    - launches a `tmux` session
+    - executes `preflight_env.sh`
+    - synchronises via sentinel file
+    - enforces timeout on environment creation
+- Confirms environment availability before allowing pipeline execution
+
+# Script Structure
+Each preflight script follows a consistent structure:
 ```text
-utils/arrays.sh  → PREFLIGHT_ARRAY
+GUARDS
+SETUP
+SOURCE
+CHECKS
+MAIN
 ```
 
-`preflight/preflight.sh` sources and executes each script listed in `PREFLIGHT_ARRAY`.
+- `GUARDS` validate required input variables
+- `SETUP` defines script-level constants
+- `SOURCE` imports required definitions
+- `CHECKS` validate consumed state
+- `MAIN` performs validation or state construction
 
-# Current preflight order
-```text
-preflight_variables.sh
-preflight_input.sh
-preflight_commands.sh
-preflight_scripts.sh
-preflight_env.sh
-```
+This structure ensures:
+- predictable control flow
+- minimal side effects
+- explicit dependencies
 
-All scripts are executed sequentially and share a single shell environment.
+# Environment Construction Model
+The pipeline implements a two-stage environment construction model:
 
-## `preflight_input.sh`
-Validates pipeline input data.
+1. `preflight_multiqc.sh`
+- Runs in the main preflight context
+- Checks if the environment already exists
+- Launches a `tmux` session if required
+- Passes required variables across the boundary
+- Waits for a sentinel file to signal completion
 
-### Responsibilities
-- Confirms `INPUT_DIR` is defined and non‑empty
-- Verifies that `INPUT_DIR` exists
-- Recursively confirms presence of `.fastq.gz` files
+2. `preflight_env.sh`
+- Runs inside the `tmux` session (new shell)
+- Re-sources required functions
+- Enables `conda`
+- Creates the environment from a YAML file
+- Writes a sentinel file upon completion
 
-This script enforces the pipeline’s input contract, ensuring that valid FASTQ data is available before execution begins.
+This separation ensures:
+- correct handling of execution boundaries
+- no reliance on inherited shell state
+- deterministic environment provisioning
 
-## `preflight_variables.sh`
-Validates required user‑defined configuration variables.
+# Execution ABI
+The preflight layer constructs the execution ABI via:
+- `array_exports.sh` → defines required variables
+- `preflight_exports.sh` → constructs `SBATCH_EXPORTS`
 
-### Responsibilities
-- Confirms all variables listed in `VARIABLE_ARRAY` are defined and non‑empty
+This ensures that:
+- only required variables are passed to SLURM jobs
+- no implicit environmental state is relied upon
+- execution is reproducible across compute nodes
 
-These variables originate from `config.sh` and are later exported as part of the execution ABI.
+# Execution Relationships
 
-## `preflight_scripts.sh`
-Validates pipeline module integrity.
+| Script | Responsibility |
+|--------|----------------|
+| `preflight.sh` | Orchestrates execution of all preflight checks |
+| `preflight_paths.sh` | Defines and creates required directories |
+| `preflight_variables.sh` | Validates user configuration variables |
+| `preflight_binaries.sh` | Validates required system binaries |
+| `preflight_input.sh` | Validates input FASTQ directory and files |
+| `preflight_exports.sh` | Constructs SBATCH_EXPORTS from EXPORT_ARRAY |
+| `preflight_pipeline.sh` | Validates pipeline scripts and orchestrator |
+| `preflight_multiqc.sh` | Orchestrates environment creation via tmux and validation |
+| `preflight_env.sh` | Creates conda environment within execution boundary |
 
-### Responsibilities
-- Confirms all scripts listed in `SCRIPT_ARRAY` exist under `modules/`
-- Verifies that each script is non‑empty
-- Confirms presence and integrity of `modules/pipeline.sh`
+# Key Rules
+- Do not include execution logic in preflight scripts
+- Do not defer validation to later stages
+- Always fail immediately on errors
+- Only validate variables consumed by the script
+- Maintain strict ordering via `PREFLIGHT_ARRAY`
+- Do not rely on implicit environment state
+- Ensure all execution dependencies are satisfied before completion
+- Treat `tmux` and SLURM transitions as strict execution boundaries
 
-This ensures that execution modules are present and valid before any job submission.
+# Summary
+The `preflight/` directory guarantees that the pipeline executes in an environment that is:
+- fully validated
+- reproducible
+- deterministic
 
-## `preflight_commands.sh`
-Validates required framework‑level external commands.
-
-### Responsibilities
-- Confirms availability of all commands listed in `COMMAND_ARRAY`
-- Uses strict `PATH`‑based validation
-
-Commands validated include:
-- SLURM submission (`sbatch`)
-- Shell environment (`bash`)
-- Conda environment management (`conda`)
-- Module system (`module`)
-- QC tools (`fastqc`, `multiqc`)
-- Core filesystem and text-processing utilities
-
-This step guarantees that all required external dependencies are available before execution.
-
-## `preflight_env.sh`
-Validates and ensures the MultiQC conda environment.
-
-### Responsibilities
-- Checks whether the required conda environment exists
-- Validates the associated YAML definition file
-- Creates the environment deterministically if missing
-- Executes environment creation in a tmux session to allow non-blocking execution
-- Uses a sentinel file to synchronise environment creation
-- Enforces a timeout to prevent indefinite hangs
-- Confirms environment availability after creation
-
-This script defines all environment‑level invariants required for downstream execution.
-
-# Execution Model
-All preflight scripts are:
-- Executed on the login node
-- Sourced into a single shell for shared context
-- Run in a strictly defined order
-- Terminated immediately on failure
-
-The pipeline does not proceed unless all preflight scripts complete successfully.
-
-# Invariants Guaranteed After Preflight
-After successful preflight validation, downstream pipeline stages may assume:
-- All configuration variables are defined and valid
-- Input directory contains valid FASTQ data
-- Required framework-level commands are available
-- The MultiQC conda environment exists and is functional
-- Module scripts exist and contain executable code
-- Execution ABI (`EXPORT_ARRAY`) is complete and correctly defined
-
-This contract ensures a clean and strict separation between validation and execution throughout the `fastq-qc` pipeline.
-
-# Notes
-- Preflight scripts are not intended to be run directly by end users
-- Conda environment creation is deterministic and restart‑safe
-- All validation logic is centralized in this directory
-- Execution modules do not repeat validation checks
-- Arrays (`PREFLIGHT_ARRAY`, `COMMAND_ARRAY`, `VARIABLE_ARRAY`) define the canonical validation surface
-- Any modification to configuration, inputs, or pipeline structure requires rerunning preflight
+By enforcing strict contracts and fail-fast validation, it provides a clean boundary between setup and execution.
+This ensures that all downstream pipeline stages can operate:
+- without ambiguity
+- without hidden dependencies
+- with full confidence in their execution context

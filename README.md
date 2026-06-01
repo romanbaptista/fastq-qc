@@ -3,149 +3,204 @@
 # Overview
 This repository contains the `fastq-qc` pipeline — a modular, HPC‑compatible workflow for:
 
-> Quality control of compressed FASTQ sequencing data using FastQC and MultiQC in a reproducible, restart-safe, > > and execution-contract–driven manner.
+> Performing quality control analysis of FASTQ files using FastQC and MultiQC within a reproducible, contract‑driven SLURM execution model.
 
-The pipeline is designed to operate on raw sequencing outputs and provides a deterministic QC stage that can be chained into downstream pipelines such as trimming, alignment, or variant calling.
+The pipeline is designed for execution in HPC environments and provides:
+- Deterministic quality control using FastQC and MultiQC
+- Fully validated execution environment prior to any job submission
+- Environment provisioning via reproducible `conda` specifications
+- Parallel execution through SLURM compute nodes
+- Clean separation between validation, orchestration, and execution
+- Restart-safe, deterministic outputs
 
-The pipeline is designed specifically for HPC environments and supports:
-- Explicit environment contracts for deterministic execution across SLURM boundaries
-- Strict separation of configuration, validation, orchestration, and execution layers
-- Comprehensive preflight validation before any SLURM jobs are submitted
-- Fully deterministic conda environment setup using a pinned YAML definition
-- Restart-safe execution with isolated stage outputs
-- Canonical pipeline structure defined via shared arrays and enforced contracts
+Internally, the pipeline adheres to a contract-driven architecture, enforcing strict separation between:
+- configuration
+- validation
+- execution
 
-All pipeline outputs are written to a dedicated `output/` directory, enabling clean integration with downstream workflows.
+This ensures reproducibility, portability, and fail‑fast behaviour across different HPC systems.
+
+All outputs are written to a structured output/ directory, enabling seamless integration with downstream pipelines such as trimming or alignment.
 
 # Repository Structure
 ```text
 fastq-qc/
-├── README.md                               # Top-level overview (this file)
-├── config.sh                               # User configuration (inputs and parameters)
-├── run_pipeline.sh                         # Entry point (login-node orchestration)
-├── utils/                                  # Shared utilities and canonical definitions
-│   ├── arrays.sh                           # Source of truth for pipeline structure and ABI
-│   ├── functions_base.sh                   # General-purpose helper functions
-│   └── functions_env.sh                    # Conda environment setup helpers
-├── preflight/                              # Preflight validation layer
+├── README.md                  # Top-level overview (this file)
+├── config.sh                  # User configuration (inputs + resources)
+├── fastq-qc.sh               # Entry point (logging + preflight + submission)
+│
+├── arrays/                   # Declarative pipeline contracts
+│   ├── array_preflight.sh
+│   ├── array_pipeline.sh
+│   ├── array_variables.sh
+│   ├── array_binaries.sh
+│   └── array_exports.sh
+│
+├── utils/                    # Static variable definitions (no logic)
+│   ├── utils_paths.sh
+│   └── utils_multiqc.sh
+│
+├── functions/                # Atomic helper functions
+│   ├── functions_base.sh
+│   └── functions_conda.sh
+│
+├── preflight/                # Validation + environment setup
 │   ├── preflight.sh
-│   ├── preflight_input.sh
+│   ├── preflight_paths.sh
 │   ├── preflight_variables.sh
-│   ├── preflight_scripts.sh
-│   ├── preflight_commands.sh
-│   └── preflight_env.sh
-├── modules/                                # Execution modules
-│   ├── pipeline.sh                         # Internal orchestrator (SLURM job)
-│   ├── 1_fastqc.sh                         # FastQC execution module
-│   └── 2_multiqc.sh                        # MultiQC aggregation module
-└── output/                                 # Pipeline-generated results (created at runtime)
+│   ├── preflight_binaries.sh
+│   ├── preflight_input.sh
+│   ├── preflight_exports.sh
+│   ├── preflight_pipeline.sh
+│   ├── preflight_env.sh
+│   └── preflight_multiqc.sh
+│
+├── pipeline/                 # Execution layer
+│   ├── pipeline.sh
+│   ├── 1-fastqc.sh
+│   └── 2-multiqc.sh
+│
+├── output/                   # Pipeline-generated outputs (created at runtime)
+├── logs/                     # Centralised logs
+└── env/                      # Environment artefacts and reproducibility records
 ```
 
 # Workflow
 At a high level, the pipeline proceeds as follows:
 
-### Preflight validation
-- Verifies all required framework-level commands are available
-- Confirms all required user configuration variables are set and non-empty
-- Validates presence and integrity of module scripts
-- Confirms the input directory exists and contains `.fastq.gz` files
-- Ensures the required MultiQC conda environment exists or creates it deterministically via `tmux`
-- Guarantees all execution invariants before any SLURM jobs are submitted
+## Preflight validation
+The preflight layer performs strict fail-fast validation before any compute job is submitted:
+- Verifies all required system binaries are available
+- Confirms all user-defined variables are set and valid
+- Validates input directory structure and FASTQ files
+- Ensures all pipeline scripts exist and are executable
+- Constructs the execution ABI (`EXPORT_ARRAY`)
+- Confirms pipeline structure and execution modules
+- Creates a deterministic `conda` environment for MultiQC using:
+  - reproducible YAML specification
+  - tmux-based environment provisioning
+  - sentinel-driven synchronisation with timeout protection
 
-All validation is authoritative and occurs before any SLURM jobs are submitted.
+## Pipeline orchestration
+The entrypoint submits a SLURM orchestration script (`pipeline.sh`), which:
+- Logs execution using a centralised log file
+- Submits module scripts as SLURM jobs using sbatch
+- Passes the full execution ABI via `SBATCH_EXPORTS`
+- Captures job IDs for dependency chaining
 
-### Pipeline orchestration
-- Submits an internal orchestrator job (`modules/pipeline.sh`) from the login node
-- Defines a strict execution ABI via `EXPORT_ARRAY`
-- Passes only explicitly declared variables to downstream jobs via `--export`
-- Dispatches sequential QC modules using SLURM dependency chaining
+## Execution modules
 
-### FastQC stage
-- Executes `1_fastqc.sh` under SLURM
-- Iterates over all `.fastq.gz` files in the input directory
-- Generates per-file FastQC outputs
-- Writes results to a dedicated stage directory
+### `1-fastqc.sh`
+- Runs FastQC on all detected `.fastq.gz` files
+- Uses per-file processing to ensure robustness
+- Writes results to the `FASTQC_OUTDIR`
+- Uses SLURM-provided CPU allocation
 
-### MultiQC stage
-- Executes `2_multiqc.sh` only after successful FastQC completion
-- Activates a deterministic conda environment
-- Aggregates FastQC results into a single report
-- Writes outputs to a dedicated stage directory
+### `2-multiqc.sh`
+- Activates the pre-built `conda` environment
+- Aggregates FastQC outputs into a single report
+- Uses a job-specific temporary directory
+- Writes results to the MULTIQC_OUTDIR
 
-Modules assume all preflight guarantees are satisfied and do not revalidate inputs.
+# Dependency model
+Execution order is strictly enforced:
+```text
+1-fastqc → 2-multiqc
+```
+
+MultiQC only runs if FastQC completes successfully.
+
+# Execution environment
+- Preflight runs on the login node
+- Environment creation occurs inside a `tmux` session
+- Execution modules run on SLURM compute nodes
+- No implicit state is relied upon across boundaries
+- All variables passed via `SBATCH_EXPORTS`
+
+This ensures full reproducibility and portability across HPC clusters.
 
 # Configuration
-All user‑tunable parameters are defined in `config.sh`.
+All user-defined parameters are specified in `config.sh`.
+
+At minimum, the pipeline requires:
+```bash
+INPUT_DIR="<path to FASTQ directory>"
+FASTQC_CPUS=<int>
+FASTQC_MEM_PER_CPU="<value>"
+MULTIQC_CPUS=<int>
+MULTIQC_MEM_PER_CPU="<value>"
+```
 
 | Variable | Description |
-|----------|-------------|
-| `INPUT_DIR` | Directory containing `.fastq.gz` files to process |
-| `TMUX_SESSION_NAME` | Name of the tmux session used for conda environment creation |
-| `FASTQC_CPUS` | Number of CPU threads allocated per FastQC task |
-| `FASTQC_MEM_PER_CPU` | Memory allocated per CPU for FastQC |
-| `MULTIQC_CPUS` | Number of CPU threads allocated for MultiQC |
-| `MULTIQC_MEM_PER_CPU` | Memory allocated per CPU for MultiQC |
-
-# Required Input Layout
-The pipeline does not enforce a strict directory structure. Any `.fastq.gz` files located beneath `INPUT_DIR` will be processed.
-Example:
-
-```text
-INPUT_DIR/
-├── sample1.fastq.gz
-├── sample2.fastq.gz
-```
-
-or, as generated by the `sra-convert` pipeline:
-
-```text
-INPUT_DIR/
-└── SRRXXXXXXXX/
-    ├── SRRXXXXXXXX_1.fastq.gz
-    ├── SRRXXXXXXXX_2.fastq.gz
-```
+|----------|------------|
+| `INPUT_DIR` | Directory containing input `.fastq.gz` files |
+| `FASTQC_CPUS` | Number of CPUs allocated to FastQC jobs |
+| `FASTQC_MEM_PER_CPU` | Memory per CPU for FastQC |
+| `MULTIQC_CPUS` | Number of CPUs allocated to MultiQC |
+| `MULTIQC_MEM_PER_CPU` | Memory per CPU for MultiQC |
 
 # Usage
-Navigate to the root of the repository and run:
-
+From the pipeline root directory:
 ```bash
-bash run_pipeline.sh
+bash fastq-qc.sh
 ```
 
 This will:
-- Perform all preflight validation checks
-- Verify or create the required conda environment
-- Submit the QC workflow to the cluster via SLURM
-
-The pipeline is restart‑safe; re-running the entrypoint will not recreate existing environments or overwrite completed outputs.
+- Run full preflight validation
+- Construct the execution environment
+- Submit SLURM jobs
+- Execute FastQC and MultiQC in sequence
 
 # Outputs
-All pipeline outputs are written under `output/`, grouped by stage.
-Example structure after completion:
+All outputs are written to `output/` in execution order:
 
 ```text
 output/
-├── fastqc/
-│   ├── sample1_fastqc.html
+├── 1-fastqc/
 │   ├── sample1_fastqc.zip
+│   ├── sample1_fastqc.html
 │   └── ...
-└── multiqc/
+└── 2-multiqc/
     ├── multiqc_report.html
-    └── multiqc_report_data/
+    └── multiqc_data/
 ```
 
-Each stage is isolated, enabling straightforward inspection and downstream use.
+Outputs are:
+- deterministic
+- reproducible
+- organised by execution stage
+
+# Architecture Summary
+
+| Layer | Responsibility |
+|------|----------------|
+| `config.sh` | User-defined configuration |
+| `arrays/` | Declarative ABI and pipeline contract |
+| `utils/` | Static parameter definitions |
+| `functions/` | Atomic helper logic |
+| `preflight/` | Validation and environment setup |
+| `pipeline/` | SLURM orchestration |
+| `modules` | Execution (FastQC, MultiQC) |
+
 
 # Further Documentation
-For detailed documentation on individual components, see:
-- `preflight/README.md` — validation guarantees and execution ordering
-- `modules/README.md` — execution model and module contracts
-- `utils/README.md` — shared utilities and ABI definitions
+For detailed documentation on individual components:
+- `arrays/README.md` — contract layer and ABI design
+- `preflight/README.md` — validation logic and guarantees
+- `pipeline/README.md` — orchestration and execution model
+- `utils/README.md` — static configuration variables
+- `functions/README.md` — helper abstractions
+
+# Design Principles
+This pipeline enforces:
+- Contract-driven design
+- Fail-fast validation
+- Explicit execution boundaries
+- Deterministic environment provisioning
+- Strict separation of concerns
 
 # Citation
 If you use this pipeline in published work, please cite:
 
 > Baptista, R. _fastq-qc: A contract-driven HPC pipeline for FASTQ quality control_.
 > GitHub repository: https://github.com/romanbaptista/fastq-qc
-
-Optionally include the commit hash or release tag used for analysis.
