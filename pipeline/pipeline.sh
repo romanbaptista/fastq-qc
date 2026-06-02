@@ -4,6 +4,7 @@ set -euo pipefail
 ######################### GUARDS #########################
 
 GUARD_ARRAY=(
+    FUNCTIONS_DIR
     ARRAY_DIR
     LOG_DIR
     PIPELINE_DIR
@@ -15,7 +16,7 @@ GUARD_ARRAY=(
 )
 
 for var in "${GUARD_ARRAY[@]}"; do
-    variable_check_nonempty "${var}" || fail_message "Guard check failed: ${var}"
+    : "${!var:?${var} not set or empty}"
 done
 
 ######################### SETUP ###########################
@@ -24,6 +25,7 @@ SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
 
 ######################### SOURCE ##########################
 
+source "${FUNCTIONS_DIR}/functions_base.sh"
 source "${ARRAY_DIR}/array_pipeline.sh"    
 
 ######################### CHECKS #########################

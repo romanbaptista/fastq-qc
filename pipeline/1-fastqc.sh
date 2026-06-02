@@ -4,12 +4,13 @@ set -euo pipefail
 ######################### GUARDS #########################
 
 GUARD_ARRAY=(
+    FUNCTIONS_DIR
     INPUT_DIR
     FASTQC_OUTDIR
 )
 
 for var in "${GUARD_ARRAY[@]}"; do
-    variable_check_nonempty "${var}" || fail_message "Guard check failed: ${var}"
+    : "${!var:?${var} not set or empty}"
 done
 
 ######################### SETUP ##########################
@@ -21,6 +22,7 @@ SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}" .sh)"
 
 # Enable module loading
 source /etc/profile.d/modules.sh
+source "${FUNCTIONS_DIR}/functions_base.sh"
 
 ######################### MAIN ###########################
 
