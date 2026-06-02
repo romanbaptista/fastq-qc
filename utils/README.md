@@ -8,7 +8,7 @@ These scripts define:
 - environment parameters
 - tool-specific configuration values
 
-Importantly, utils/ is a pure definition layer — it contains no logic, validation, or execution.
+Importantly, `utils/` is a pure definition layer — it contains no logic, validation, or execution.
 
 # Design Principles
 The `utils/` layer follows strict design rules:
